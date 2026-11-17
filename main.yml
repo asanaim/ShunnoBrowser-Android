@@ -1,6 +1,11 @@
 name: Build Shunno Browser Ultra-Lite APK
 
-on: [push, workflow_dispatch]
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -25,12 +30,12 @@ jobs:
           cache-disabled: true
 
       - name: Build R8-Shrunk Ultra-Lite APK
-        run: gradle assembleRelease --no-daemon
+        run: gradle assembleDebug --no-daemon
 
       - name: Prepare Release APK
         run: |
           mkdir -p release-apk
-          cp app/build/outputs/apk/release/app-release.apk release-apk/ShunnoBrowser.apk
+          cp app/build/outputs/apk/debug/app-debug.apk release-apk/ShunnoBrowser.apk
 
       - name: Upload ShunnoBrowser APK Artifact
         uses: actions/upload-artifact@v4

@@ -23,6 +23,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.webkit.CookieManager
+import android.webkit.URLUtil
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -115,9 +116,10 @@ class MainActivity : ComponentActivity() {
         return try {
             val uri = Uri.parse(rawUrl)
             val trackingKeys = setOf("utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid", "si", "igshid")
-            if (uri.queryParameterNames.none { it in trackingKeys }) return rawUrl
+            val names = uri.queryParameterNames
+            if (names.none { it in trackingKeys }) return rawUrl
             val builder = uri.buildUpon().clearQuery()
-            for (param in uri.queryParameterNames) {
+            for (param in names) {
                 if (param !in trackingKeys) {
                     uri.getQueryParameters(param).forEach { builder.appendQueryParameter(param, it) }
                 }
@@ -129,46 +131,44 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun buildCupertinoUi() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#F2F2F7"))
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.setBackgroundColor(Color.parseColor("#F2F2F7"))
+        root.layoutParams = ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+
+        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal)
+        progressBar.max = 100
+        progressBar.visibility = View.GONE
+        progressBar.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3))
+
+        findBar = LinearLayout(this)
+        findBar.orientation = LinearLayout.HORIZONTAL
+        findBar.gravity = Gravity.CENTER_VERTICAL
+        findBar.setBackgroundColor(Color.WHITE)
+        findBar.setPadding(dp(12), dp(6), dp(12), dp(6))
+        findBar.visibility = View.GONE
+
+        findInput = EditText(this)
+        findInput.hint = "Find in page..."
+        findInput.textSize = 14f
+        findInput.setSingleLine(true)
+        findInput.background = roundRect("#F2F2F7", 10f)
+        findInput.setPadding(dp(10), dp(6), dp(10), dp(6))
+        findInput.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        findInput.setOnEditorActionListener { _, _, _ ->
+            currentWebView()?.findAllAsync(findInput.text.toString())
+            true
         }
 
-        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            max = 100
-            visibility = View.GONE
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3))
-        }
+        findCountText = TextView(this)
+        findCountText.text = "0/0"
+        findCountText.textSize = 12f
+        findCountText.setTextColor(Color.GRAY)
+        findCountText.setPadding(dp(8), 0, dp(8), 0)
 
-        findBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.WHITE)
-            setPadding(dp(12), dp(6), dp(12), dp(6))
-            visibility = View.GONE
-        }
-        findInput = EditText(this).apply {
-            hint = "Find in page..."
-            textSize = 14f
-            setSingleLine(true)
-            background = roundRect("#F2F2F7", 10f)
-            setPadding(dp(10), dp(6), dp(10), dp(6))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnEditorActionListener { _, _, _ ->
-                currentWebView()?.findAllAsync(text.toString())
-                true
-            }
-        }
-        findCountText = TextView(this).apply {
-            text = "0/0"
-            textSize = 12f
-            setTextColor(Color.GRAY)
-            setPadding(dp(8), 0, dp(8), 0)
-        }
         val findNextBtn = makeChip("↓", "#EBF4FF", "#0A84FF") { currentWebView()?.findNext(true) }
         val findPrevBtn = makeChip("↑", "#EBF4FF", "#0A84FF") { currentWebView()?.findNext(false) }
         val findCloseBtn = makeChip("✕", "#FFEBEA", "#FF3B30") {
@@ -181,56 +181,58 @@ class MainActivity : ComponentActivity() {
         findBar.addView(findNextBtn)
         findBar.addView(findCloseBtn)
 
-        webContainer = FrameLayout(this).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-        }
+        webContainer = FrameLayout(this)
+        webContainer.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
 
-        mediaPill = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            background = roundRect("#E61C1C1E", 22f)
-            setPadding(dp(14), dp(10), dp(14), dp(10))
-            visibility = View.GONE
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            ).apply { bottomMargin = dp(14) }
-        }
-        mediaPillLabel = TextView(this).apply {
-            text = "🎯 Stream Detected"
-            setTextColor(Color.WHITE)
-            textSize = 13f
-            setTypeface(null, Typeface.BOLD)
-        }
-        val grabBtn = TextView(this).apply {
-            text = "  ⚡ Shunno Get  "
-            setTextColor(Color.WHITE)
-            textSize = 12f
-            setTypeface(null, Typeface.BOLD)
-            background = roundRect("#30D158", 14f)
-            setPadding(dp(8), dp(5), dp(8), dp(5))
-            setOnClickListener { showDetectedStreamsDialog() }
-        }
-        val dismissPillBtn = TextView(this).apply {
-            text = " ✕ "
-            setTextColor(Color.LTGRAY)
-            textSize = 13f
-            setPadding(dp(6), 0, 0, 0)
-            setOnClickListener { mediaPill.visibility = View.GONE }
-        }
+        mediaPill = LinearLayout(this)
+        mediaPill.orientation = LinearLayout.HORIZONTAL
+        mediaPill.gravity = Gravity.CENTER_VERTICAL
+        mediaPill.background = roundRect("#E61C1C1E", 22f)
+        mediaPill.setPadding(dp(14), dp(10), dp(14), dp(10))
+        mediaPill.visibility = View.GONE
+        val pillParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+        )
+        pillParams.bottomMargin = dp(14)
+        mediaPill.layoutParams = pillParams
+
+        mediaPillLabel = TextView(this)
+        mediaPillLabel.text = "🎯 Stream Detected"
+        mediaPillLabel.setTextColor(Color.WHITE)
+        mediaPillLabel.textSize = 13f
+        mediaPillLabel.setTypeface(null, Typeface.BOLD)
+
+        val grabBtn = TextView(this)
+        grabBtn.text = "  ⚡ Shunno Get  "
+        grabBtn.setTextColor(Color.WHITE)
+        grabBtn.textSize = 12f
+        grabBtn.setTypeface(null, Typeface.BOLD)
+        grabBtn.background = roundRect("#30D158", 14f)
+        grabBtn.setPadding(dp(8), dp(5), dp(8), dp(5))
+        grabBtn.setOnClickListener { showDetectedStreamsDialog() }
+
+        val dismissPillBtn = TextView(this)
+        dismissPillBtn.text = " ✕ "
+        dismissPillBtn.setTextColor(Color.LTGRAY)
+        dismissPillBtn.textSize = 13f
+        dismissPillBtn.setPadding(dp(6), 0, 0, 0)
+        dismissPillBtn.setOnClickListener { mediaPill.visibility = View.GONE }
+
+        val spacer = TextView(this)
+        spacer.text = "   "
         mediaPill.addView(mediaPillLabel)
-        mediaPill.addView(TextView(this).apply { text = "   " })
+        mediaPill.addView(spacer)
         mediaPill.addView(grabBtn)
         mediaPill.addView(dismissPillBtn)
 
-        val navBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.WHITE)
-            setPadding(dp(8), dp(7), dp(8), dp(7))
-            elevation = dp(6).toFloat()
-        }
+        val navBar = LinearLayout(this)
+        navBar.orientation = LinearLayout.HORIZONTAL
+        navBar.gravity = Gravity.CENTER_VERTICAL
+        navBar.setBackgroundColor(Color.WHITE)
+        navBar.setPadding(dp(8), dp(7), dp(8), dp(7))
+        navBar.elevation = dp(6).toFloat()
 
         val backBtn = makeIconBtn("‹") {
             val wv = currentWebView()
@@ -241,43 +243,43 @@ class MainActivity : ComponentActivity() {
             if (wv != null && wv.canGoForward()) wv.goForward()
         }
 
-        urlInput = EditText(this).apply {
-            hint = "Search or enter URL..."
-            textSize = 13.5f
-            setTextColor(Color.parseColor("#1C1C1E"))
-            setHintTextColor(Color.parseColor("#8E8E93"))
-            setSingleLine(true)
-            imeOptions = EditorInfo.IME_ACTION_GO
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            background = roundRect("#F2F2F7", 12f)
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                leftMargin = dp(4)
-                rightMargin = dp(4)
-            }
-            setOnEditorActionListener { _, actionId, event ->
-                if (actionId == EditorInfo.IME_ACTION_GO || event?.keyCode == KeyEvent.KEYCODE_ENTER) {
-                    navigateTo(text.toString())
-                    true
-                } else false
+        urlInput = EditText(this)
+        urlInput.hint = "Search or enter URL..."
+        urlInput.textSize = 13.5f
+        urlInput.setTextColor(Color.parseColor("#1C1C1E"))
+        urlInput.setHintTextColor(Color.parseColor("#8E8E93"))
+        urlInput.setSingleLine(true)
+        urlInput.imeOptions = EditorInfo.IME_ACTION_GO
+        urlInput.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+        urlInput.background = roundRect("#F2F2F7", 12f)
+        urlInput.setPadding(dp(12), dp(8), dp(12), dp(8))
+        val urlParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        urlParams.leftMargin = dp(4)
+        urlParams.rightMargin = dp(4)
+        urlInput.layoutParams = urlParams
+        urlInput.setOnEditorActionListener { _, actionId, event ->
+            if (actionId == EditorInfo.IME_ACTION_GO || event?.keyCode == KeyEvent.KEYCODE_ENTER) {
+                navigateTo(urlInput.text.toString())
+                true
+            } else {
+                false
             }
         }
 
         val reloadBtn = makeIconBtn("↻") { currentWebView()?.reload() }
 
-        tabCountBtn = TextView(this).apply {
-            text = "1"
-            textSize = 12f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#0A84FF"))
-            gravity = Gravity.CENTER
-            background = roundRect("#EBF4FF", 9f)
-            layoutParams = LinearLayout.LayoutParams(dp(30), dp(30)).apply {
-                leftMargin = dp(4)
-                rightMargin = dp(4)
-            }
-            setOnClickListener { showTabsSwitcherDialog() }
-        }
+        tabCountBtn = TextView(this)
+        tabCountBtn.text = "1"
+        tabCountBtn.textSize = 12f
+        tabCountBtn.setTypeface(null, Typeface.BOLD)
+        tabCountBtn.setTextColor(Color.parseColor("#0A84FF"))
+        tabCountBtn.gravity = Gravity.CENTER
+        tabCountBtn.background = roundRect("#EBF4FF", 9f)
+        val tabParams = LinearLayout.LayoutParams(dp(30), dp(30))
+        tabParams.leftMargin = dp(4)
+        tabParams.rightMargin = dp(4)
+        tabCountBtn.layoutParams = tabParams
+        tabCountBtn.setOnClickListener { showTabsSwitcherDialog() }
 
         val menuBtn = makeIconBtn("☰") { showNbProPowerMenu() }
 
@@ -303,111 +305,110 @@ class MainActivity : ComponentActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun createNewTab(targetUrl: String, switchTo: Boolean) {
-        val wv = WebView(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = !incognitoMode
-            settings.databaseEnabled = !incognitoMode
-            settings.builtInZoomControls = true
-            settings.displayZoomControls = false
-            settings.mediaPlaybackRequiresUserGesture = false
-            settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        val wv = WebView(this)
+        wv.layoutParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        )
+        wv.settings.javaScriptEnabled = true
+        wv.settings.domStorageEnabled = !incognitoMode
+        wv.settings.databaseEnabled = !incognitoMode
+        wv.settings.builtInZoomControls = true
+        wv.settings.displayZoomControls = false
+        wv.settings.mediaPlaybackRequiresUserGesture = false
+        wv.settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
 
-            setFindListener { activeMatchOrdinal, numberOfMatches, _ ->
-                findCountText.text = if (numberOfMatches > 0) "${activeMatchOrdinal + 1}/$numberOfMatches" else "0/0"
+        wv.setFindListener { activeMatchOrdinal, numberOfMatches, _ ->
+            findCountText.text = if (numberOfMatches > 0) "${activeMatchOrdinal + 1}/$numberOfMatches" else "0/0"
+        }
+
+        wv.setDownloadListener { url, _, contentDisposition, _, _ ->
+            val fileName = URLUtil.guessFileName(url, contentDisposition, null)
+            val cookies = CookieManager.getInstance().getCookie(url)
+            promptShunnoGetDownload(url, fileName, wv.url, cookies)
+        }
+
+        wv.webChromeClient = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                progressBar.progress = newProgress
+                progressBar.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
             }
 
-            setDownloadListener { url, _, contentDisposition, _, _ ->
-                val fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, null)
-                val cookies = CookieManager.getInstance().getCookie(url)
-                promptShunnoGetDownload(url, fileName, this.url, cookies)
+            override fun onReceivedTitle(view: WebView?, title: String?) {
+                tabs.find { it.webView == view }?.title = title ?: "Tab"
             }
+        }
 
-            webChromeClient = object : WebChromeClient() {
-                override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                    progressBar.progress = newProgress
-                    progressBar.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
+        wv.webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): WebResourceResponse? {
+                val reqUrl = request?.url?.toString().orEmpty()
+                val host = request?.url?.host.orEmpty().lowercase()
+
+                if (globalAdBlock && adHosts.any { host.endsWith(it) }) {
+                    blockedAdsCount++
+                    return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
                 }
 
-                override fun onReceivedTitle(view: WebView?, title: String?) {
-                    tabs.find { it.webView == view }?.title = title ?: "Tab"
-                }
-            }
-
-            webViewClient = object : WebViewClient() {
-                override fun shouldInterceptRequest(
-                    view: WebView?,
-                    request: WebResourceRequest?
-                ): WebResourceResponse? {
-                    val reqUrl = request?.url?.toString().orEmpty()
-                    val host = request?.url?.host.orEmpty().lowercase()
-
-                    if (globalAdBlock && adHosts.any { host.endsWith(it) }) {
-                        blockedAdsCount++
-                        return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-                    }
-
-                    val cleanPath = reqUrl.substringBefore('?').lowercase()
-                    if (cleanPath.endsWith(".mp4") || cleanPath.endsWith(".m3u8") ||
-                        cleanPath.endsWith(".flac") || cleanPath.endsWith(".m4a") ||
-                        cleanPath.endsWith(".mp3") || cleanPath.endsWith(".zip") ||
-                        cleanPath.endsWith(".apk")
-                    ) {
-                        runOnUiThread {
-                            if (!detectedMedia.contains(reqUrl)) {
-                                detectedMedia.add(0, reqUrl)
-                                mediaPillLabel.text = "🎯 ${detectedMedia.size} Stream(s)"
-                                mediaPill.visibility = View.VISIBLE
-                            }
+                val cleanPath = reqUrl.substringBefore('?').lowercase()
+                if (cleanPath.endsWith(".mp4") || cleanPath.endsWith(".m3u8") ||
+                    cleanPath.endsWith(".flac") || cleanPath.endsWith(".m4a") ||
+                    cleanPath.endsWith(".mp3") || cleanPath.endsWith(".zip") ||
+                    cleanPath.endsWith(".apk")
+                ) {
+                    runOnUiThread {
+                        if (!detectedMedia.contains(reqUrl)) {
+                            detectedMedia.add(0, reqUrl)
+                            mediaPillLabel.text = "🎯 ${detectedMedia.size} Stream(s)"
+                            mediaPill.visibility = View.VISIBLE
                         }
                     }
-                    return super.shouldInterceptRequest(view, request)
+                }
+                return super.shouldInterceptRequest(view, request)
+            }
+
+            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                val currentUrl = url.orEmpty()
+                val host = Uri.parse(currentUrl).host.orEmpty().lowercase()
+                view?.settings?.javaScriptEnabled = host !in siteJsDisabled
+                view?.settings?.loadsImagesAutomatically = host !in siteImagesDisabled
+                if (host in siteDesktopMode) {
+                    view?.settings?.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36"
                 }
 
-                override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                    val currentUrl = url.orEmpty()
-                    val host = Uri.parse(currentUrl).host.orEmpty().lowercase()
-                    view?.settings?.javaScriptEnabled = host !in siteJsDisabled
-                    view?.settings?.loadsImagesAutomatically = host !in siteImagesDisabled
-                    if (host in siteDesktopMode) {
-                        view?.settings?.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36"
-                    }
-
-                    tabs.find { it.webView == view }?.url = currentUrl
-                    if (view == currentWebView() && !urlInput.hasFocus()) {
-                        urlInput.setText(currentUrl)
-                    }
-
-                    if (backgroundYouTubePlay && view != null) {
-                        injectBackgroundMediaScript(view)
-                    }
+                tabs.find { it.webView == view }?.url = currentUrl
+                if (view == currentWebView() && !urlInput.hasFocus()) {
+                    urlInput.setText(currentUrl)
                 }
 
-                override fun onPageFinished(view: WebView?, url: String?) {
-                    if (view == null) return
-                    val currentUrl = url.orEmpty()
-                    val host = Uri.parse(currentUrl).host.orEmpty().lowercase()
-
-                    if (backgroundYouTubePlay) {
-                        injectBackgroundMediaScript(view)
-                        if (host.contains("youtube.com") || host.contains("youtu.be")) {
-                            BackgroundMediaService.updateOrStart(this@MainActivity, "Playing YouTube in background")
-                        }
-                    }
-                    if (sponsorBlockAndShortsClean && host.contains("youtube.com")) {
-                        injectYouTubeClutterAndSponsorScript(view)
-                    }
-                    if (autoRejectCookies) {
-                        injectCookieBannerRejector(view)
-                    }
-                    if (oledForceDark) {
-                        injectOledForceDark(view)
-                    }
-                    injectCustomUserScripts(view, host)
+                if (backgroundYouTubePlay && view != null) {
+                    injectBackgroundMediaScript(view)
                 }
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                if (view == null) return
+                val currentUrl = url.orEmpty()
+                val host = Uri.parse(currentUrl).host.orEmpty().lowercase()
+
+                if (backgroundYouTubePlay) {
+                    injectBackgroundMediaScript(view)
+                    if (host.contains("youtube.com") || host.contains("youtu.be")) {
+                        BackgroundMediaService.updateOrStart(this@MainActivity, "Playing YouTube in background")
+                    }
+                }
+                if (sponsorBlockAndShortsClean && host.contains("youtube.com")) {
+                    injectYouTubeClutterAndSponsorScript(view)
+                }
+                if (autoRejectCookies) {
+                    injectCookieBannerRejector(view)
+                }
+                if (oledForceDark) {
+                    injectOledForceDark(view)
+                }
+                injectCustomUserScripts(view, host)
             }
         }
 
@@ -490,11 +491,10 @@ class MainActivity : ComponentActivity() {
             currentWebView()?.evaluateJavascript("window.getSelection().toString()") { raw ->
                 val selected = raw?.trim('"')?.trim().orEmpty()
                 if (selected.isNotEmpty()) {
-                    val dictIntent = Intent(Intent.ACTION_PROCESS_TEXT).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_PROCESS_TEXT, selected)
-                        putExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, true)
-                    }
+                    val dictIntent = Intent(Intent.ACTION_PROCESS_TEXT)
+                    dictIntent.type = "text/plain"
+                    dictIntent.putExtra(Intent.EXTRA_PROCESS_TEXT, selected)
+                    dictIntent.putExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, true)
                     try {
                         startActivity(dictIntent)
                     } catch (_: Exception) {
@@ -534,9 +534,9 @@ class MainActivity : ComponentActivity() {
         val options = arrayOf(
             "⚡ Shunno Get Downloads (${ShunnoGetEngine.downloads.size})",
             "🎧 Background YouTube Audio: ${if (backgroundYouTubePlay) "ON" else "OFF"}",
-            "🛡️ AdBlock (${blockedAdsCount} blocked): ${if (globalAdBlock) "ON" else "OFF"}",
+            "🛡️ AdBlock ($blockedAdsCount blocked): ${if (globalAdBlock) "ON" else "OFF"}",
             "🎬 SponsorBlock & Shorts Stripper: ${if (sponsorBlockAndShortsClean) "ON" else "OFF"}",
-            "⏩ Video Playback Speed (1.0× / 1.5× / 2.0× / 3.0×)",
+            "⏩ Video Playback Speed (0.75× – 3.0×)",
             "📖 Clean Reader Mode",
             "🌑 OLED Force-Dark Mode: ${if (oledForceDark) "ON" else "OFF"}",
             "💻 Site Desktop User-Agent ($host): ${if (host in siteDesktopMode) "ON" else "OFF"}",
@@ -652,30 +652,29 @@ class MainActivity : ComponentActivity() {
 
     private fun showShunnoGetManagerDialog() {
         val scroll = ScrollView(this)
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(12), dp(16), dp(12))
-        }
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.setPadding(dp(16), dp(12), dp(16), dp(12))
+
         if (ShunnoGetEngine.downloads.isEmpty()) {
-            box.addView(TextView(this).apply {
-                text = "No downloads yet. Tap any file link or use the floating Stream Pill."
-                textSize = 14f
-            })
+            val empty = TextView(this)
+            empty.text = "No downloads yet. Tap any file link or use the floating Stream Pill."
+            empty.textSize = 14f
+            box.addView(empty)
         } else {
             for (d in ShunnoGetEngine.downloads) {
                 val mbDone = d.downloadedBytes / (1024 * 1024)
                 val mbTot = if (d.totalBytes > 0) "${d.totalBytes / (1024 * 1024)} MB" else "?"
                 val speedKb = d.speedBps / 1024
-                val row = TextView(this).apply {
-                    text = "• ${d.fileName}
+                val row = TextView(this)
+                row.text = "• ${d.fileName}
    ${d.status} • $mbDone / $mbTot MB (${d.threads}T • ${speedKb} KB/s)
    [Tap to Pause/Resume]"
-                    textSize = 13f
-                    setPadding(0, dp(8), 0, dp(8))
-                    setOnClickListener {
-                        if (d.status == "DOWNLOADING") ShunnoGetEngine.pause(d.id)
-                        else if (d.status != "COMPLETED") ShunnoGetEngine.start(this@MainActivity, d) { }
-                    }
+                row.textSize = 13f
+                row.setPadding(0, dp(8), 0, dp(8))
+                row.setOnClickListener {
+                    if (d.status == "DOWNLOADING") ShunnoGetEngine.pause(d.id)
+                    else if (d.status != "COMPLETED") ShunnoGetEngine.start(this@MainActivity, d) { }
                 }
                 box.addView(row)
             }
@@ -739,36 +738,39 @@ class MainActivity : ComponentActivity() {
 ") { "${it.first}|${it.second}" })
     }
 
-    private fun makeIconBtn(label: String, onClick: () -> Unit): TextView =
-        TextView(this).apply {
-            text = label
-            textSize = 19f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#0A84FF"))
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(dp(34), dp(36))
-            setOnClickListener { onClick() }
-        }
+    private fun makeIconBtn(label: String, onClick: () -> Unit): TextView {
+        val tv = TextView(this)
+        tv.text = label
+        tv.textSize = 19f
+        tv.setTypeface(null, Typeface.BOLD)
+        tv.setTextColor(Color.parseColor("#0A84FF"))
+        tv.gravity = Gravity.CENTER
+        tv.layoutParams = LinearLayout.LayoutParams(dp(34), dp(36))
+        tv.setOnClickListener { onClick() }
+        return tv
+    }
 
-    private fun makeChip(label: String, bgHex: String, fgHex: String, onClick: () -> Unit): TextView =
-        TextView(this).apply {
-            text = label
-            textSize = 12f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor(fgHex))
-            background = roundRect(bgHex, 8f)
-            setPadding(dp(9), dp(5), dp(9), dp(5))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                leftMargin = dp(4)
-            }
-            setOnClickListener { onClick() }
-        }
+    private fun makeChip(label: String, bgHex: String, fgHex: String, onClick: () -> Unit): TextView {
+        val tv = TextView(this)
+        tv.text = label
+        tv.textSize = 12f
+        tv.setTypeface(null, Typeface.BOLD)
+        tv.setTextColor(Color.parseColor(fgHex))
+        tv.background = roundRect(bgHex, 8f)
+        tv.setPadding(dp(9), dp(5), dp(9), dp(5))
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.leftMargin = dp(4)
+        tv.layoutParams = lp
+        tv.setOnClickListener { onClick() }
+        return tv
+    }
 
-    private fun roundRect(hexColor: String, radiusDp: Float): GradientDrawable =
-        GradientDrawable().apply {
-            setColor(Color.parseColor(hexColor))
-            cornerRadius = dp(radiusDp.toInt()).toFloat()
-        }
+    private fun roundRect(hexColor: String, radiusDp: Float): GradientDrawable {
+        val gd = GradientDrawable()
+        gd.setColor(Color.parseColor(hexColor))
+        gd.cornerRadius = dp(radiusDp.toInt()).toFloat()
+        return gd
+    }
 
     private fun dp(value: Int): Int =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), resources.displayMetrics).toInt()
