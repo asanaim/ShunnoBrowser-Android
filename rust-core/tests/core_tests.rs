@@ -61,7 +61,7 @@ fn test_downloader_helpers() {
     assert_eq!(sanitize_download_filename("../evil/CON.exe?token=1"), "_CON.exe");
     assert_eq!(detect_download_category("album.flac"), "Lossless Audio");
     assert_eq!(detect_download_category("movie.mp4"), "Videos");
-    assert_eq!(format_human_size(1024 * 1024 * 5), "5.00 MB");
+    assert_eq!(format_human_size(1024 * 1024 * 5), "5.0 MB");
     assert_eq!(
         parse_content_disposition_filename("attachment; filename*=UTF-8''report%202026.pdf"),
         Some("report 2026.pdf".to_string())

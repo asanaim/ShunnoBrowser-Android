@@ -1,4 +1,4 @@
-name: Build Shunno Browser Android APK
+name: Build Shunno Browser Android Release APK
 
 on: [push, workflow_dispatch]
 
@@ -22,7 +22,9 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install NDK 26.3.11579264
-        run: sdkmanager "ndk;26.3.11579264"
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager "ndk;26.3.11579264"
 
       - name: Install Rust & Android Target
         uses: dtolnay/rust-toolchain@stable
@@ -38,9 +40,25 @@ jobs:
 
       - name: Cross-Compile libshunno_core.so (arm64-v8a)
         working-directory: rust-core
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/26.3.11579264
-        run: cargo ndk -t arm64-v8a -o ../app/src/main/jniLibs build --release
+        run: |
+          SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          export ANDROID_NDK_HOME="$SDK_DIR/ndk/26.3.11579264"
+          cargo ndk -t arm64-v8a -o ../app/src/main/jniLibs build --release
+
+      - name: Ensure Android Signing Keystore Exists
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -v \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
 
       - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
@@ -48,18 +66,18 @@ jobs:
           gradle-version: '8.7'
           cache-disabled: true
 
-      - name: Build Android APK
-        run: gradle assembleDebug --no-daemon
+      - name: Build Signed R8-Minified Release APK
+        run: gradle assembleRelease --no-daemon --refresh-dependencies
 
       - name: Prepare Release APK
         run: |
           mkdir -p release-apk
-          cp app/build/outputs/apk/debug/app-debug.apk release-apk/ShunnoBrowser.apk
+          cp app/build/outputs/apk/release/app-release.apk release-apk/ShunnoBrowser.apk
 
       - name: Upload ShunnoBrowser APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ShunnoBrowser-Android-APK
+          name: ShunnoBrowser-Android-Release-APK
           path: release-apk/ShunnoBrowser.apk
 
       - name: Publish 1-Click Direct Download Release
@@ -67,7 +85,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: "Shunno Browser v2.24.0 Android APK"
+          name: "Shunno Browser v2.24.0 Android Release APK"
           make_latest: true
           files: release-apk/ShunnoBrowser.apk
         env:

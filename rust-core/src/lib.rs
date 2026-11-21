@@ -96,26 +96,7 @@ async fn refresh_filter_lists_async() {
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .unwrap_or_default();
-    let mut texts = Vec::new();
-    for (_name, url) in blocker::FILTER_LISTS {
-        if let Ok(resp) = client.get(url).send().await {
-            if let Ok(body) = resp.text().await {
-                if body.len() > 1024 {
-                    texts.push(body);
-                }
-            }
-        }
-    }
-    if !texts.is_empty() {
-        let (engine, rules) = blocker::build_engine(&texts);
-        if let Ok(bytes) = engine.serialize() {
-            let dir = BrowserStorage::shared_data_dir().join("filters");
-            let _ = std::fs::create_dir_all(&dir);
-            let _ = std::fs::write(dir.join("engine-adblock-0.13.dat"), bytes);
-        }
-        blocker::global().load_cache();
-        blocker::global().set_status(format!("EasyList + EasyPrivacy ({} rules)", rules));
-    }
+    let _ = blocker::global().refresh(&client).await;
 }
 
 #[no_mangle]
@@ -426,9 +407,8 @@ pub extern "system" fn Java_com_shunnobrowser_app_core_RustCoreBridge_nativeEnqu
         if nh.is_empty() { None } else { Some(nh) },
     );
     let status = match outcome {
-        EnqueueOutcome::Queued => "QUEUED",
-        EnqueueOutcome::DuplicateActive(_) => "DUPLICATE_ACTIVE",
-        EnqueueOutcome::DuplicateCompleted(_, _) => "DUPLICATE_COMPLETED",
+        EnqueueOutcome::Started => "STARTED",
+        EnqueueOutcome::DuplicateDetected(_) => "DUPLICATE_DETECTED",
     };
     new_jstr(&mut env, status)
 }

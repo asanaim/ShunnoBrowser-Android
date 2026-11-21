@@ -37,6 +37,7 @@ import com.shunnobrowser.app.BrowserTabModel
 import com.shunnobrowser.app.TabGroupModel
 import com.shunnobrowser.app.core.RustCoreBridge
 import java.io.ByteArrayInputStream
+import java.util.concurrent.atomic.AtomicReference
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -54,12 +55,24 @@ fun CupertinoBrowserScreen(
 
     val contentGuardJs = remember {
         context.assets.open("js/content_guard.js").bufferedReader().use { it.readText() }
+            .replace("__SHUNNO_IPC_TOKEN__", "android_local")
+            .replace("__SHUNNO_ADBLOCK__", "true")
+            .replace("__SHUNNO_SPONSORBLOCK__", "true")
+            .replace("__SHUNNO_REJECT_COOKIES__", "true")
+            .replace("__SHUNNO_BASKET__", "false")
+            .replace("__SHUNNO_BG_MEDIA__", "true")
+            .replace("__SHUNNO_FULL_DARK__", "false")
+            .replace("__SHUNNO_PEEK__", "false")
+            .replace("__SHUNNO_IMAGES_DISABLED__", "false")
+            .replace("__SHUNNO_FP__", "true")
+            .replace("__SHUNNO_FP_SESSION__", "shunno_android_session")
     }
     val readabilityJs = remember {
         context.assets.open("js/readability.min.js").bufferedReader().use { it.readText() }
     }
     val readerJs = remember {
         context.assets.open("js/reader.js").bufferedReader().use { it.readText() }
+            .replace("__SHUNNO_READER_PREFS__", "{\"size\":19,\"font\":\"serif\",\"theme\":\"auto\",\"width\":\"normal\"}")
     }
 
     val tabs = remember {
@@ -332,7 +345,12 @@ fun CupertinoBrowserScreen(
             key(activeTab.id) {
                 AndroidView(
                     factory = { ctx ->
-                        activeTab.webView ?: WebView(ctx).apply {
+                        val existing = activeTab.webView
+                        if (existing != null) {
+                            (existing.parent as? ViewGroup)?.removeView(existing)
+                            existing
+                        } else WebView(ctx).apply {
+                            val currentUrlRef = AtomicReference(activeTab.url)
                             layoutParams = ViewGroup.LayoutParams(
                                 ViewGroup.LayoutParams.MATCH_PARENT,
                                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -380,7 +398,7 @@ fun CupertinoBrowserScreen(
                                     request: WebResourceRequest?
                                 ): WebResourceResponse? {
                                     val reqUrl = request?.url?.toString() ?: return null
-                                    val sourceUrl = view?.url ?: reqUrl
+                                    val sourceUrl = currentUrlRef.get() ?: reqUrl
                                     if (RustCoreBridge.nativeShouldBlock(reqUrl, sourceUrl, "other")) {
                                         return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
                                     }
@@ -389,14 +407,17 @@ fun CupertinoBrowserScreen(
                                         cleanPath.endsWith(".mpd") || cleanPath.endsWith(".flac") ||
                                         cleanPath.endsWith(".mp3") || cleanPath.endsWith(".zip")
                                     ) {
-                                        detectedMediaUrl = reqUrl
-                                        onVideoStateChanged(true)
+                                        view?.post {
+                                            detectedMediaUrl = reqUrl
+                                            onVideoStateChanged(true)
+                                        }
                                     }
                                     return super.shouldInterceptRequest(view, request)
                                 }
 
                                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                     if (!url.isNullOrBlank()) {
+                                        currentUrlRef.set(url)
                                         urlInput = url
                                         val idx = tabs.indexOfFirst { it.id == activeTab.id }
                                         if (idx != -1) tabs[idx] = tabs[idx].copy(url = url)
