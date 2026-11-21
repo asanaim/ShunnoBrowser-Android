@@ -1,777 +1,99 @@
 package com.shunnobrowser.app
 
-import android.annotation.SuppressLint
-import android.app.AlertDialog
 import android.app.PictureInPictureParams
 import android.content.Intent
-import android.graphics.Bitmap
-import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
-import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.os.Environment
-import android.text.InputType
 import android.util.Rational
-import android.util.TypedValue
-import android.view.ActionMode
-import android.view.Gravity
-import android.view.KeyEvent
-import android.view.Menu
-import android.view.View
-import android.view.ViewGroup
-import android.view.inputmethod.EditorInfo
-import android.webkit.CookieManager
-import android.webkit.URLUtil
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebSettings
 import android.webkit.WebView
-import android.webkit.WebViewClient
-import android.widget.EditText
-import android.widget.FrameLayout
-import android.widget.LinearLayout
-import android.widget.ProgressBar
-import android.widget.ScrollView
-import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.ComponentActivity
-import java.io.ByteArrayInputStream
-import java.io.File
-import java.net.URLEncoder
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.*
+import androidx.compose.ui.graphics.Color
+import com.shunnobrowser.app.core.RustCoreBridge
+import com.shunnobrowser.app.media.MediaPlaybackService
+import com.shunnobrowser.app.ui.CupertinoBrowserScreen
+
+data class BrowserTabModel(
+    val id: Long,
+    val title: String = "New Tab",
+    val url: String = "https://duckduckgo.com",
+    val isIncognito: Boolean = false,
+    val isPinned: Boolean = false,
+    val isMuted: Boolean = false,
+    val groupId: Int? = null,
+    val webView: WebView? = null
+)
+
+data class TabGroupModel(
+    val id: Int,
+    val name: String,
+    val colorHex: String,
+    val collapsed: Boolean = false
+)
 
 class MainActivity : ComponentActivity() {
-
-    private lateinit var webContainer: FrameLayout
-    private lateinit var urlInput: EditText
-    private lateinit var progressBar: ProgressBar
-    private lateinit var tabCountBtn: TextView
-    private lateinit var mediaPill: LinearLayout
-    private lateinit var mediaPillLabel: TextView
-    private lateinit var findBar: LinearLayout
-    private lateinit var findInput: EditText
-    private lateinit var findCountText: TextView
-
-    private val tabs = mutableListOf<BrowserTab>()
-    private var activeTabIndex = 0
-    private val detectedMedia = mutableListOf<String>()
-    private var blockedAdsCount = 0
-
-    private var globalAdBlock = true
-    private var backgroundYouTubePlay = true
-    private var sponsorBlockAndShortsClean = true
-    private var autoRejectCookies = true
-    private var stripTrackingParams = true
-    private var oledForceDark = false
-    private var bottomBarMode = true
-    private var incognitoMode = false
-
-    private val siteJsDisabled = mutableSetOf<String>()
-    private val siteImagesDisabled = mutableSetOf<String>()
-    private val siteDesktopMode = mutableSetOf<String>()
-    private val bookmarks = mutableListOf<Pair<String, String>>()
-
-    private val adHosts = setOf(
-        "doubleclick.net", "googlesyndication.com", "googleadservices.com",
-        "adnxs.com", "adsrvr.org", "taboola.com", "outbrain.com",
-        "popads.net", "popcash.net", "propellerads.com", "exoclick.com",
-        "scorecardresearch.com", "criteo.com", "pubmatic.com", "rubiconproject.com"
-    )
-
-    data class BrowserTab(
-        val id: Long = System.currentTimeMillis(),
-        val webView: WebView,
-        var title: String = "New Tab",
-        var url: String = "https://duckduckgo.com",
-        val isIncognito: Boolean = false
-    )
+    var autoPipEnabled by mutableStateOf(true)
+    var hasActiveVideo by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        loadBookmarks()
-        buildCupertinoUi()
+        RustCoreBridge.initialize(applicationContext)
 
-        val startUrl = extractCleanUrl(intent) ?: "https://duckduckgo.com"
-        createNewTab(startUrl, switchTo = true)
-    }
+        val initialUrl = intent?.dataString?.takeIf { it.startsWith("http") } ?: "https://duckduckgo.com"
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        extractCleanUrl(intent)?.let { incoming ->
-            createNewTab(incoming, switchTo = false)
-            updateTabCounter()
-            Toast.makeText(this, "Queued in background tab (${tabs.size})", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun extractCleanUrl(intent: Intent?): String? {
-        val raw = intent?.dataString ?: intent?.getStringExtra(Intent.EXTRA_TEXT) ?: return null
-        val match = Regex("https?://\S+").find(raw)?.value ?: return null
-        return if (stripTrackingParams) sanitizeTrackingUrl(match) else match
-    }
-
-    private fun sanitizeTrackingUrl(rawUrl: String): String {
-        return try {
-            val uri = Uri.parse(rawUrl)
-            val trackingKeys = setOf("utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid", "si", "igshid")
-            val names = uri.queryParameterNames
-            if (names.none { it in trackingKeys }) return rawUrl
-            val builder = uri.buildUpon().clearQuery()
-            for (param in names) {
-                if (param !in trackingKeys) {
-                    uri.getQueryParameters(param).forEach { builder.appendQueryParameter(param, it) }
-                }
-            }
-            builder.build().toString()
-        } catch (_: Exception) {
-            rawUrl
-        }
-    }
-
-    private fun buildCupertinoUi() {
-        val root = LinearLayout(this)
-        root.orientation = LinearLayout.VERTICAL
-        root.setBackgroundColor(Color.parseColor("#F2F2F7"))
-        root.layoutParams = ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
-        )
-
-        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal)
-        progressBar.max = 100
-        progressBar.visibility = View.GONE
-        progressBar.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3))
-
-        findBar = LinearLayout(this)
-        findBar.orientation = LinearLayout.HORIZONTAL
-        findBar.gravity = Gravity.CENTER_VERTICAL
-        findBar.setBackgroundColor(Color.WHITE)
-        findBar.setPadding(dp(12), dp(6), dp(12), dp(6))
-        findBar.visibility = View.GONE
-
-        findInput = EditText(this)
-        findInput.hint = "Find in page..."
-        findInput.textSize = 14f
-        findInput.setSingleLine(true)
-        findInput.background = roundRect("#F2F2F7", 10f)
-        findInput.setPadding(dp(10), dp(6), dp(10), dp(6))
-        findInput.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        findInput.setOnEditorActionListener { _, _, _ ->
-            currentWebView()?.findAllAsync(findInput.text.toString())
-            true
-        }
-
-        findCountText = TextView(this)
-        findCountText.text = "0/0"
-        findCountText.textSize = 12f
-        findCountText.setTextColor(Color.GRAY)
-        findCountText.setPadding(dp(8), 0, dp(8), 0)
-
-        val findNextBtn = makeChip("↓", "#EBF4FF", "#0A84FF") { currentWebView()?.findNext(true) }
-        val findPrevBtn = makeChip("↑", "#EBF4FF", "#0A84FF") { currentWebView()?.findNext(false) }
-        val findCloseBtn = makeChip("✕", "#FFEBEA", "#FF3B30") {
-            currentWebView()?.clearMatches()
-            findBar.visibility = View.GONE
-        }
-        findBar.addView(findInput)
-        findBar.addView(findCountText)
-        findBar.addView(findPrevBtn)
-        findBar.addView(findNextBtn)
-        findBar.addView(findCloseBtn)
-
-        webContainer = FrameLayout(this)
-        webContainer.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-
-        mediaPill = LinearLayout(this)
-        mediaPill.orientation = LinearLayout.HORIZONTAL
-        mediaPill.gravity = Gravity.CENTER_VERTICAL
-        mediaPill.background = roundRect("#E61C1C1E", 22f)
-        mediaPill.setPadding(dp(14), dp(10), dp(14), dp(10))
-        mediaPill.visibility = View.GONE
-        val pillParams = FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-        )
-        pillParams.bottomMargin = dp(14)
-        mediaPill.layoutParams = pillParams
-
-        mediaPillLabel = TextView(this)
-        mediaPillLabel.text = "🎯 Stream Detected"
-        mediaPillLabel.setTextColor(Color.WHITE)
-        mediaPillLabel.textSize = 13f
-        mediaPillLabel.setTypeface(null, Typeface.BOLD)
-
-        val grabBtn = TextView(this)
-        grabBtn.text = "  ⚡ Shunno Get  "
-        grabBtn.setTextColor(Color.WHITE)
-        grabBtn.textSize = 12f
-        grabBtn.setTypeface(null, Typeface.BOLD)
-        grabBtn.background = roundRect("#30D158", 14f)
-        grabBtn.setPadding(dp(8), dp(5), dp(8), dp(5))
-        grabBtn.setOnClickListener { showDetectedStreamsDialog() }
-
-        val dismissPillBtn = TextView(this)
-        dismissPillBtn.text = " ✕ "
-        dismissPillBtn.setTextColor(Color.LTGRAY)
-        dismissPillBtn.textSize = 13f
-        dismissPillBtn.setPadding(dp(6), 0, 0, 0)
-        dismissPillBtn.setOnClickListener { mediaPill.visibility = View.GONE }
-
-        val spacer = TextView(this)
-        spacer.text = "   "
-        mediaPill.addView(mediaPillLabel)
-        mediaPill.addView(spacer)
-        mediaPill.addView(grabBtn)
-        mediaPill.addView(dismissPillBtn)
-
-        val navBar = LinearLayout(this)
-        navBar.orientation = LinearLayout.HORIZONTAL
-        navBar.gravity = Gravity.CENTER_VERTICAL
-        navBar.setBackgroundColor(Color.WHITE)
-        navBar.setPadding(dp(8), dp(7), dp(8), dp(7))
-        navBar.elevation = dp(6).toFloat()
-
-        val backBtn = makeIconBtn("‹") {
-            val wv = currentWebView()
-            if (wv != null && wv.canGoBack()) wv.goBack()
-        }
-        val fwdBtn = makeIconBtn("›") {
-            val wv = currentWebView()
-            if (wv != null && wv.canGoForward()) wv.goForward()
-        }
-
-        urlInput = EditText(this)
-        urlInput.hint = "Search or enter URL..."
-        urlInput.textSize = 13.5f
-        urlInput.setTextColor(Color.parseColor("#1C1C1E"))
-        urlInput.setHintTextColor(Color.parseColor("#8E8E93"))
-        urlInput.setSingleLine(true)
-        urlInput.imeOptions = EditorInfo.IME_ACTION_GO
-        urlInput.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-        urlInput.background = roundRect("#F2F2F7", 12f)
-        urlInput.setPadding(dp(12), dp(8), dp(12), dp(8))
-        val urlParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        urlParams.leftMargin = dp(4)
-        urlParams.rightMargin = dp(4)
-        urlInput.layoutParams = urlParams
-        urlInput.setOnEditorActionListener { _, actionId, event ->
-            if (actionId == EditorInfo.IME_ACTION_GO || event?.keyCode == KeyEvent.KEYCODE_ENTER) {
-                navigateTo(urlInput.text.toString())
-                true
+        setContent {
+            var forceDark by remember { mutableStateOf(false) }
+            val darkTheme = forceDark || isSystemInDarkTheme()
+            val scheme = if (darkTheme) {
+                darkColorScheme(
+                    primary = Color(0xFF0A84FF),
+                    background = Color(0xFF000000),
+                    surface = Color(0xFF1C1C1E),
+                    onSurface = Color.White
+                )
             } else {
-                false
-            }
-        }
-
-        val reloadBtn = makeIconBtn("↻") { currentWebView()?.reload() }
-
-        tabCountBtn = TextView(this)
-        tabCountBtn.text = "1"
-        tabCountBtn.textSize = 12f
-        tabCountBtn.setTypeface(null, Typeface.BOLD)
-        tabCountBtn.setTextColor(Color.parseColor("#0A84FF"))
-        tabCountBtn.gravity = Gravity.CENTER
-        tabCountBtn.background = roundRect("#EBF4FF", 9f)
-        val tabParams = LinearLayout.LayoutParams(dp(30), dp(30))
-        tabParams.leftMargin = dp(4)
-        tabParams.rightMargin = dp(4)
-        tabCountBtn.layoutParams = tabParams
-        tabCountBtn.setOnClickListener { showTabsSwitcherDialog() }
-
-        val menuBtn = makeIconBtn("☰") { showNbProPowerMenu() }
-
-        navBar.addView(backBtn)
-        navBar.addView(fwdBtn)
-        navBar.addView(urlInput)
-        navBar.addView(reloadBtn)
-        navBar.addView(tabCountBtn)
-        navBar.addView(menuBtn)
-
-        root.addView(progressBar)
-        root.addView(findBar)
-        if (bottomBarMode) {
-            root.addView(webContainer)
-            root.addView(navBar)
-        } else {
-            root.addView(navBar)
-            root.addView(webContainer)
-        }
-
-        setContentView(root)
-    }
-
-    @SuppressLint("SetJavaScriptEnabled")
-    private fun createNewTab(targetUrl: String, switchTo: Boolean) {
-        val wv = WebView(this)
-        wv.layoutParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.MATCH_PARENT
-        )
-        wv.settings.javaScriptEnabled = true
-        wv.settings.domStorageEnabled = !incognitoMode
-        wv.settings.databaseEnabled = !incognitoMode
-        wv.settings.builtInZoomControls = true
-        wv.settings.displayZoomControls = false
-        wv.settings.mediaPlaybackRequiresUserGesture = false
-        wv.settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-
-        wv.setFindListener { activeMatchOrdinal, numberOfMatches, _ ->
-            findCountText.text = if (numberOfMatches > 0) "${activeMatchOrdinal + 1}/$numberOfMatches" else "0/0"
-        }
-
-        wv.setDownloadListener { url, _, contentDisposition, _, _ ->
-            val fileName = URLUtil.guessFileName(url, contentDisposition, null)
-            val cookies = CookieManager.getInstance().getCookie(url)
-            promptShunnoGetDownload(url, fileName, wv.url, cookies)
-        }
-
-        wv.webChromeClient = object : WebChromeClient() {
-            override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                progressBar.progress = newProgress
-                progressBar.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
+                lightColorScheme(
+                    primary = Color(0xFF0A84FF),
+                    background = Color(0xFFF2F2F7),
+                    surface = Color(0xFFFFFFFF),
+                    onSurface = Color(0xFF1C1C1E)
+                )
             }
 
-            override fun onReceivedTitle(view: WebView?, title: String?) {
-                tabs.find { it.webView == view }?.title = title ?: "Tab"
-            }
-        }
-
-        wv.webViewClient = object : WebViewClient() {
-            override fun shouldInterceptRequest(
-                view: WebView?,
-                request: WebResourceRequest?
-            ): WebResourceResponse? {
-                val reqUrl = request?.url?.toString().orEmpty()
-                val host = request?.url?.host.orEmpty().lowercase()
-
-                if (globalAdBlock && adHosts.any { host.endsWith(it) }) {
-                    blockedAdsCount++
-                    return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-                }
-
-                val cleanPath = reqUrl.substringBefore('?').lowercase()
-                if (cleanPath.endsWith(".mp4") || cleanPath.endsWith(".m3u8") ||
-                    cleanPath.endsWith(".flac") || cleanPath.endsWith(".m4a") ||
-                    cleanPath.endsWith(".mp3") || cleanPath.endsWith(".zip") ||
-                    cleanPath.endsWith(".apk")
-                ) {
-                    runOnUiThread {
-                        if (!detectedMedia.contains(reqUrl)) {
-                            detectedMedia.add(0, reqUrl)
-                            mediaPillLabel.text = "🎯 ${detectedMedia.size} Stream(s)"
-                            mediaPill.visibility = View.VISIBLE
+            MaterialTheme(colorScheme = scheme) {
+                CupertinoBrowserScreen(
+                    initialUrl = initialUrl,
+                    isDark = darkTheme,
+                    onToggleDark = { forceDark = !forceDark },
+                    onEnterPip = { enterPipNow() },
+                    onVideoStateChanged = { playing ->
+                        hasActiveVideo = playing
+                        if (playing) {
+                            startForegroundService(
+                                Intent(this, MediaPlaybackService::class.java).putExtra("title", "Playing media in background")
+                            )
                         }
                     }
-                }
-                return super.shouldInterceptRequest(view, request)
+                )
             }
-
-            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                val currentUrl = url.orEmpty()
-                val host = Uri.parse(currentUrl).host.orEmpty().lowercase()
-                view?.settings?.javaScriptEnabled = host !in siteJsDisabled
-                view?.settings?.loadsImagesAutomatically = host !in siteImagesDisabled
-                if (host in siteDesktopMode) {
-                    view?.settings?.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36"
-                }
-
-                tabs.find { it.webView == view }?.url = currentUrl
-                if (view == currentWebView() && !urlInput.hasFocus()) {
-                    urlInput.setText(currentUrl)
-                }
-
-                if (backgroundYouTubePlay && view != null) {
-                    injectBackgroundMediaScript(view)
-                }
-            }
-
-            override fun onPageFinished(view: WebView?, url: String?) {
-                if (view == null) return
-                val currentUrl = url.orEmpty()
-                val host = Uri.parse(currentUrl).host.orEmpty().lowercase()
-
-                if (backgroundYouTubePlay) {
-                    injectBackgroundMediaScript(view)
-                    if (host.contains("youtube.com") || host.contains("youtu.be")) {
-                        BackgroundMediaService.updateOrStart(this@MainActivity, "Playing YouTube in background")
-                    }
-                }
-                if (sponsorBlockAndShortsClean && host.contains("youtube.com")) {
-                    injectYouTubeClutterAndSponsorScript(view)
-                }
-                if (autoRejectCookies) {
-                    injectCookieBannerRejector(view)
-                }
-                if (oledForceDark) {
-                    injectOledForceDark(view)
-                }
-                injectCustomUserScripts(view, host)
-            }
-        }
-
-        val tab = BrowserTab(webView = wv, url = targetUrl, isIncognito = incognitoMode)
-        tabs.add(tab)
-        if (switchTo) {
-            switchToTab(tabs.size - 1)
-        }
-        wv.loadUrl(targetUrl)
-        updateTabCounter()
-    }
-
-    private fun switchToTab(index: Int) {
-        if (index !in tabs.indices) return
-        activeTabIndex = index
-        webContainer.removeAllViews()
-        val activeTab = tabs[index]
-        webContainer.addView(activeTab.webView)
-        webContainer.addView(mediaPill)
-        urlInput.setText(activeTab.url)
-        updateTabCounter()
-    }
-
-    private fun currentWebView(): WebView? = tabs.getOrNull(activeTabIndex)?.webView
-
-    private fun updateTabCounter() {
-        tabCountBtn.text = if (incognitoMode) "🕵${tabs.size}" else "${tabs.size}"
-    }
-
-    private fun navigateTo(raw: String) {
-        val trimmed = raw.trim()
-        if (trimmed.isEmpty()) return
-        val finalUrl = when {
-            trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
-            trimmed.contains('.') && !trimmed.contains(' ') -> "https://$trimmed"
-            else -> "https://duckduckgo.com/?q=${URLEncoder.encode(trimmed, "UTF-8")}"
-        }
-        val clean = if (stripTrackingParams) sanitizeTrackingUrl(finalUrl) else finalUrl
-        detectedMedia.clear()
-        mediaPill.visibility = View.GONE
-        currentWebView()?.loadUrl(clean)
-    }
-
-    private fun injectBackgroundMediaScript(wv: WebView) {
-        val js = "(function(){try{Object.defineProperty(document,'hidden',{get:()=>false,configurable:true});Object.defineProperty(document,'visibilityState',{get:()=>'visible',configurable:true});window.addEventListener('visibilitychange',e=>e.stopImmediatePropagation(),true);document.addEventListener('visibilitychange',e=>e.stopImmediatePropagation(),true);}catch(e){}})();"
-        wv.evaluateJavascript(js, null)
-    }
-
-    private fun injectYouTubeClutterAndSponsorScript(wv: WebView) {
-        val js = "(function(){const s=document.createElement('style');s.textContent='ytm-reel-shelf-renderer,ytm-rich-section-renderer,.ad-showing,.ytp-ad-module{display:none!important;}';document.head&&document.head.appendChild(s);setInterval(()=>{const b=document.querySelector('.ytp-ad-skip-button,.ytp-ad-skip-button-modern');if(b)b.click();const v=document.querySelector('video');if(v&&document.querySelector('.ad-showing')){v.playbackRate=16.0;v.muted=true;}},800);})();"
-        wv.evaluateJavascript(js, null)
-    }
-
-    private fun injectCookieBannerRejector(wv: WebView) {
-        val js = "(function(){['[id*="reject"]','[class*="reject"]','[aria-label*="Reject"]','#onetrust-reject-all-handler','.fc-cta-do-not-consent'].forEach(sel=>document.querySelectorAll(sel).forEach(b=>b.click()));})();"
-        wv.evaluateJavascript(js, null)
-    }
-
-    private fun injectOledForceDark(wv: WebView) {
-        val js = "(function(){const s=document.createElement('style');s.textContent='html,body{background:#000000!important;color:#E5E5EA!important;}img,video{filter:none!important;}';document.head&&document.head.appendChild(s);})();"
-        wv.evaluateJavascript(js, null)
-    }
-
-    private fun injectCustomUserScripts(wv: WebView, host: String) {
-        try {
-            val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "ShunnoBrowser/scripts")
-            if (!dir.exists()) return
-            dir.listFiles { f -> f.extension.equals("js", true) }?.forEach { scriptFile ->
-                val code = scriptFile.readText()
-                if (!code.contains("@match") || code.contains(host)) {
-                    wv.evaluateJavascript(code, null)
-                }
-            }
-        } catch (_: Exception) { }
-    }
-
-    override fun onActionModeStarted(mode: ActionMode?) {
-        super.onActionModeStarted(mode)
-        mode?.menu?.add(Menu.NONE, 9001, 0, "📖 Shunno Dictionary")?.setOnMenuItemClickListener {
-            currentWebView()?.evaluateJavascript("window.getSelection().toString()") { raw ->
-                val selected = raw?.trim('"')?.trim().orEmpty()
-                if (selected.isNotEmpty()) {
-                    val dictIntent = Intent(Intent.ACTION_PROCESS_TEXT)
-                    dictIntent.type = "text/plain"
-                    dictIntent.putExtra(Intent.EXTRA_PROCESS_TEXT, selected)
-                    dictIntent.putExtra(Intent.EXTRA_PROCESS_TEXT_READONLY, true)
-                    try {
-                        startActivity(dictIntent)
-                    } catch (_: Exception) {
-                        Toast.makeText(this, "Install Shunno Dictionary for instant pop-up lookup", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-            mode.finish()
-            true
-        }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        if (!backgroundYouTubePlay) {
-            currentWebView()?.onPause()
         }
     }
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && backgroundYouTubePlay) {
-            try {
-                enterPictureInPictureMode(
-                    PictureInPictureParams.Builder()
-                        .setAspectRatio(Rational(16, 9))
-                        .build()
-                )
-            } catch (_: Exception) { }
+        if (autoPipEnabled && hasActiveVideo) {
+            enterPipNow()
         }
     }
 
-    private fun showNbProPowerMenu() {
-        val currentUrl = currentWebView()?.url.orEmpty()
-        val host = Uri.parse(currentUrl).host.orEmpty().lowercase()
-
-        val options = arrayOf(
-            "⚡ Shunno Get Downloads (${ShunnoGetEngine.downloads.size})",
-            "🎧 Background YouTube Audio: ${if (backgroundYouTubePlay) "ON" else "OFF"}",
-            "🛡️ AdBlock ($blockedAdsCount blocked): ${if (globalAdBlock) "ON" else "OFF"}",
-            "🎬 SponsorBlock & Shorts Stripper: ${if (sponsorBlockAndShortsClean) "ON" else "OFF"}",
-            "⏩ Video Playback Speed (0.75× – 3.0×)",
-            "📖 Clean Reader Mode",
-            "🌑 OLED Force-Dark Mode: ${if (oledForceDark) "ON" else "OFF"}",
-            "💻 Site Desktop User-Agent ($host): ${if (host in siteDesktopMode) "ON" else "OFF"}",
-            "⚙️ Site JavaScript ($host): ${if (host !in siteJsDisabled) "ON" else "OFF"}",
-            "🖼️ Site Images ($host): ${if (host !in siteImagesDisabled) "ON" else "OFF"}",
-            "🔍 Find in Page",
-            "⭐ Add Bookmark / View Bookmarks",
-            "🕵️ Toggle Incognito Mode: ${if (incognitoMode) "ON" else "OFF"}"
-        )
-
-        AlertDialog.Builder(this)
-            .setTitle("Shunno Browser • NBPro Controls")
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> showShunnoGetManagerDialog()
-                    1 -> {
-                        backgroundYouTubePlay = !backgroundYouTubePlay
-                        if (!backgroundYouTubePlay) BackgroundMediaService.stop(this)
-                        Toast.makeText(this, "Background YouTube Audio: $backgroundYouTubePlay", Toast.LENGTH_SHORT).show()
-                    }
-                    2 -> globalAdBlock = !globalAdBlock
-                    3 -> {
-                        sponsorBlockAndShortsClean = !sponsorBlockAndShortsClean
-                        currentWebView()?.reload()
-                    }
-                    4 -> showVideoSpeedPicker()
-                    5 -> activateCleanReaderMode()
-                    6 -> {
-                        oledForceDark = !oledForceDark
-                        currentWebView()?.reload()
-                    }
-                    7 -> {
-                        if (host in siteDesktopMode) siteDesktopMode.remove(host) else siteDesktopMode.add(host)
-                        currentWebView()?.reload()
-                    }
-                    8 -> {
-                        if (host in siteJsDisabled) siteJsDisabled.remove(host) else siteJsDisabled.add(host)
-                        currentWebView()?.reload()
-                    }
-                    9 -> {
-                        if (host in siteImagesDisabled) siteImagesDisabled.remove(host) else siteImagesDisabled.add(host)
-                        currentWebView()?.reload()
-                    }
-                    10 -> {
-                        findBar.visibility = View.VISIBLE
-                        findInput.requestFocus()
-                    }
-                    11 -> showBookmarksDialog()
-                    12 -> {
-                        incognitoMode = !incognitoMode
-                        createNewTab("https://duckduckgo.com", switchTo = true)
-                    }
-                }
-            }
-            .show()
+    fun enterPipNow() {
+        val params = PictureInPictureParams.Builder()
+            .setAspectRatio(Rational(16, 9))
+            .build()
+        enterPictureInPictureMode(params)
     }
-
-    private fun showVideoSpeedPicker() {
-        val speeds = arrayOf("0.75×", "1.0× (Normal)", "1.25×", "1.5×", "2.0×", "3.0×")
-        val values = floatArrayOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f)
-        AlertDialog.Builder(this)
-            .setTitle("HTML5 Video Speed Controller")
-            .setItems(speeds) { _, idx ->
-                val rate = values[idx]
-                currentWebView()?.evaluateJavascript(
-                    "document.querySelectorAll('video,audio').forEach(m => m.playbackRate = $rate);",
-                    null
-                )
-            }
-            .show()
-    }
-
-    private fun activateCleanReaderMode() {
-        val js = "(function(){const t=(document.querySelector('article')||document.body).innerText;document.body.innerHTML='<div style="max-width:680px;margin:24px auto;padding:16px;font-family:-apple-system,sans-serif;font-size:19px;line-height:1.65;color:#1C1C1E;background:#F2F2F7;">'+t.split('\n').filter(p=>p.trim().length>0).map(p=>'<p style="margin-bottom:16px;">'+p+'</p>').join('')+'</div>';})();"
-        currentWebView()?.evaluateJavascript(js, null)
-    }
-
-    private fun showDetectedStreamsDialog() {
-        if (detectedMedia.isEmpty()) return
-        val labels = detectedMedia.map { it.substringAfterLast('/').substringBefore('?') }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("Sniffed Media & Files (${detectedMedia.size})")
-            .setItems(labels) { _, idx ->
-                val targetUrl = detectedMedia[idx]
-                val fileName = labels[idx].ifBlank { "stream_${System.currentTimeMillis() % 10000}.mp4" }
-                val cookies = CookieManager.getInstance().getCookie(currentWebView()?.url)
-                promptShunnoGetDownload(targetUrl, fileName, currentWebView()?.url, cookies)
-            }
-            .show()
-    }
-
-    private fun promptShunnoGetDownload(url: String, fileName: String, referer: String?, cookie: String?) {
-        val threadOptions = arrayOf("8 Parallel Threads (Recommended)", "16 Parallel Threads (Max Speed)", "4 Threads", "1 Stream")
-        val threadCounts = intArrayOf(8, 16, 4, 1)
-        AlertDialog.Builder(this)
-            .setTitle("⚡ Shunno Get • $fileName")
-            .setItems(threadOptions) { _, idx ->
-                val rec = DownloadRecord(
-                    id = System.currentTimeMillis(),
-                    url = url,
-                    fileName = fileName,
-                    threads = threadCounts[idx],
-                    category = ShunnoGetEngine.detectCategory(fileName),
-                    referer = referer,
-                    cookie = cookie
-                )
-                ShunnoGetEngine.downloads.add(0, rec)
-                ShunnoGetEngine.start(this, rec) { }
-                Toast.makeText(this, "Downloading $fileName (${rec.threads} threads)", Toast.LENGTH_SHORT).show()
-            }
-            .show()
-    }
-
-    private fun showShunnoGetManagerDialog() {
-        val scroll = ScrollView(this)
-        val box = LinearLayout(this)
-        box.orientation = LinearLayout.VERTICAL
-        box.setPadding(dp(16), dp(12), dp(16), dp(12))
-
-        if (ShunnoGetEngine.downloads.isEmpty()) {
-            val empty = TextView(this)
-            empty.text = "No downloads yet. Tap any file link or use the floating Stream Pill."
-            empty.textSize = 14f
-            box.addView(empty)
-        } else {
-            for (d in ShunnoGetEngine.downloads) {
-                val mbDone = d.downloadedBytes / (1024 * 1024)
-                val mbTot = if (d.totalBytes > 0) "${d.totalBytes / (1024 * 1024)} MB" else "?"
-                val speedKb = d.speedBps / 1024
-                val row = TextView(this)
-                row.text = "• ${d.fileName}
-   ${d.status} • $mbDone / $mbTot MB (${d.threads}T • ${speedKb} KB/s)
-   [Tap to Pause/Resume]"
-                row.textSize = 13f
-                row.setPadding(0, dp(8), 0, dp(8))
-                row.setOnClickListener {
-                    if (d.status == "DOWNLOADING") ShunnoGetEngine.pause(d.id)
-                    else if (d.status != "COMPLETED") ShunnoGetEngine.start(this@MainActivity, d) { }
-                }
-                box.addView(row)
-            }
-        }
-        scroll.addView(box)
-        AlertDialog.Builder(this)
-            .setTitle("⚡ Shunno Get Manager")
-            .setView(scroll)
-            .setPositiveButton("Close", null)
-            .show()
-    }
-
-    private fun showTabsSwitcherDialog() {
-        val titles = tabs.mapIndexed { idx, t ->
-            val prefix = if (idx == activeTabIndex) "● " else "○ "
-            "$prefix${t.title.take(36)}"
-        }.toTypedArray()
-
-        AlertDialog.Builder(this)
-            .setTitle("Open Tabs (${tabs.size})")
-            .setItems(titles) { _, idx -> switchToTab(idx) }
-            .setPositiveButton("+ New Tab") { _, _ -> createNewTab("https://duckduckgo.com", switchTo = true) }
-            .setNeutralButton("Close Current") { _, _ ->
-                if (tabs.size > 1) {
-                    tabs.removeAt(activeTabIndex).webView.destroy()
-                    switchToTab((activeTabIndex - 1).coerceAtLeast(0))
-                }
-            }
-            .show()
-    }
-
-    private fun showBookmarksDialog() {
-        val cur = currentWebView()
-        val items = (listOf("➕ Bookmark Current Page") + bookmarks.map { "★ ${it.first}" }).toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("Portable Bookmarks")
-            .setItems(items) { _, idx ->
-                if (idx == 0 && cur != null) {
-                    bookmarks.add(0, (cur.title ?: "Bookmark") to (cur.url ?: ""))
-                    saveBookmarks()
-                    Toast.makeText(this, "Bookmarked!", Toast.LENGTH_SHORT).show()
-                } else if (idx > 0) {
-                    navigateTo(bookmarks[idx - 1].second)
-                }
-            }
-            .show()
-    }
-
-    private fun loadBookmarks() {
-        val file = File(filesDir, "shunno_bookmarks.txt")
-        if (!file.exists()) return
-        file.readLines().forEach { line ->
-            val parts = line.split("|", limit = 2)
-            if (parts.size == 2) bookmarks.add(parts[0] to parts[1])
-        }
-    }
-
-    private fun saveBookmarks() {
-        val file = File(filesDir, "shunno_bookmarks.txt")
-        file.writeText(bookmarks.joinToString("
-") { "${it.first}|${it.second}" })
-    }
-
-    private fun makeIconBtn(label: String, onClick: () -> Unit): TextView {
-        val tv = TextView(this)
-        tv.text = label
-        tv.textSize = 19f
-        tv.setTypeface(null, Typeface.BOLD)
-        tv.setTextColor(Color.parseColor("#0A84FF"))
-        tv.gravity = Gravity.CENTER
-        tv.layoutParams = LinearLayout.LayoutParams(dp(34), dp(36))
-        tv.setOnClickListener { onClick() }
-        return tv
-    }
-
-    private fun makeChip(label: String, bgHex: String, fgHex: String, onClick: () -> Unit): TextView {
-        val tv = TextView(this)
-        tv.text = label
-        tv.textSize = 12f
-        tv.setTypeface(null, Typeface.BOLD)
-        tv.setTextColor(Color.parseColor(fgHex))
-        tv.background = roundRect(bgHex, 8f)
-        tv.setPadding(dp(9), dp(5), dp(9), dp(5))
-        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        lp.leftMargin = dp(4)
-        tv.layoutParams = lp
-        tv.setOnClickListener { onClick() }
-        return tv
-    }
-
-    private fun roundRect(hexColor: String, radiusDp: Float): GradientDrawable {
-        val gd = GradientDrawable()
-        gd.setColor(Color.parseColor(hexColor))
-        gd.cornerRadius = dp(radiusDp.toInt()).toFloat()
-        return gd
-    }
-
-    private fun dp(value: Int): Int =
-        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), resources.displayMetrics).toInt()
 }

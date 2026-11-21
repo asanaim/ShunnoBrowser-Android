@@ -1,0 +1,35 @@
+[package]
+name = "shunno-core"
+version = "2.24.0"
+edition = "2021"
+description = "Shunno Browser Android Native Core (adblock-rust, 32-thread HTTP Range engine, sanitizer, HTTPS guard, Chromium importer)"
+license-file = "../LICENSE"
+publish = false
+
+[lib]
+name = "shunno_core"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tokio = { version = "1.38", features = ["rt-multi-thread", "time", "sync"] }
+# No "gzip": transparent decompression would make Range offsets refer to compressed bytes and corrupt segmented files.
+reqwest = { version = "0.12.5", default-features = false, features = ["rustls-tls", "stream"] }
+futures-util = "0.3.30"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10.8"
+hex = "0.4.3"
+url = "2.5.2"
+rand = "0.8.5"
+dirs = "5.0.1"
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+ed25519-dalek = { version = "3.0.0", default-features = false }
+adblock = { version = "0.13.6", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling"] }
+jni = { version = "0.21.1", default-features = false }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

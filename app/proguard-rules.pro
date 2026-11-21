@@ -1,5 +1,2 @@
--optimizationpasses 5
--allowaccessmodification
--repackageclasses 'sb'
--dontwarn android.**
--dontwarn androidx.**
+-keep class com.shunnobrowser.app.core.RustCoreBridge { *; }
+-keep class com.shunnobrowser.app.core.RustCoreBridge$* { *; }
